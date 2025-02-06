@@ -1,13 +1,16 @@
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form
-from pydantic import BaseModel
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from psycopg2.extras import RealDictCursor
 import psycopg2
 from ultralytics import YOLO
 from PIL import Image, ImageDraw, ImageFont
 import io
 import base64
+from reportlab.pdfgen import canvas
+from fastapi import Path
+from fastapi.responses import Response
 
 # Configuração do banco de dados
 DB_USER = "postgres"
@@ -15,35 +18,30 @@ DB_PASSWORD = "12345"
 DB_HOST = "localhost"
 DB_NAME = "haircheck"
 
-# Conexão com o banco de dados
 conn = psycopg2.connect(
     user=DB_USER, password=DB_PASSWORD, host=DB_HOST, database=DB_NAME
 )
 
-# Inicialização do FastAPI
 app = FastAPI()
 
-# Configuração CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Atualize para o domínio do frontend
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Modelo para o login do usuário
 class User(BaseModel):
     id: str
     name: str
     email: str
 
-# Configuração do modelo YOLO
-model = YOLO("models/best.pt")  # Certifique-se de que este caminho está correto
-ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/jpg"}
+model = YOLO("models/best.pt")
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png"}
 CONFIDENCE_THRESHOLD = 0.5
 
-# Rota para login/autenticação do usuário
+
 @app.post("/api/login")
 async def login(user: User):
     try:
@@ -63,25 +61,19 @@ async def login(user: User):
         raise HTTPException(status_code=500, detail=f"Erro ao processar login: {str(e)}")
 
 
-# Rota para análise de imagem
 @app.post("/analyze_image/")
-async def analyze_image(
-    image: UploadFile = File(...),
-    user_id: str = Form(...)
-):
+async def analyze_image(image: UploadFile = File(...), user_id: str = Form(...)):
     if not user_id:
         raise HTTPException(status_code=400, detail="ID do usuário é obrigatório.")
 
     if image.content_type not in ALLOWED_IMAGE_TYPES:
-        raise HTTPException(status_code=400, detail="Formato de imagem inválido. Envie uma imagem JPEG ou PNG.")
+        raise HTTPException(status_code=400, detail="Formato de imagem inválido.")
 
     try:
-        # Ler a imagem enviada
         contents = await image.read()
         img = Image.open(io.BytesIO(contents))
-
-        # Realizar a detecção
         results = model(img)
+
         best_detection = None
         for result in results:
             for box in result.boxes:
@@ -92,13 +84,12 @@ async def analyze_image(
                         best_detection = {
                             "class": cls,
                             "confidence": conf,
-                            "box": box.xyxy[0].tolist(),  # x1, y1, x2, y2
+                            "box": box.xyxy[0].tolist(),
                         }
 
         if not best_detection:
             raise HTTPException(status_code=404, detail="Nenhuma detecção com confiança suficiente.")
 
-        # Desenhar a detecção na imagem
         x1, y1, x2, y2 = best_detection["box"]
         draw = ImageDraw.Draw(img)
         draw.rectangle([x1, y1, x2, y2], outline="red", width=3)
@@ -106,27 +97,21 @@ async def analyze_image(
         text = f"{best_detection['class']} {best_detection['confidence']:.2f}"
         draw.text((x1, y1 - 10), text, fill="red", font=font)
 
-        # Converter a imagem processada para bytes
         img_byte_arr = io.BytesIO()
         img.save(img_byte_arr, format="JPEG")
         img_byte_arr.seek(0)
         img_bytes = img_byte_arr.getvalue()
 
-        # Salvar a detecção no banco de dados
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO detections (user_id, class_detected, confidence, image)
-                    VALUES (%s, %s, %s, %s)
-                    """,
-                    (user_id, best_detection["class"], best_detection["confidence"], img_bytes),
-                )
-                conn.commit()
-        except Exception as db_error:
-            raise HTTPException(status_code=500, detail=f"Erro ao salvar no banco de dados: {str(db_error)}")
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO detections (user_id, class_detected, confidence, image)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (user_id, best_detection["class"], best_detection["confidence"], img_bytes),
+            )
+            conn.commit()
 
-        # Retornar a imagem e as informações de detecção
         img_base64 = base64.b64encode(img_bytes).decode("utf-8")
         return JSONResponse(
             content={
@@ -141,45 +126,102 @@ async def analyze_image(
         raise HTTPException(status_code=500, detail=f"Erro ao processar a imagem: {str(e)}")
 
 
-# Rota para recuperar o histórico de detecções de um usuário
-@app.get("/user_detections/")
-async def get_user_detections(user_id: str):
+@app.get("/user_detections/insights/")
+async def get_user_detections_insights(user_id: str):
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            cursor.execute(
-                """
+            cursor.execute("""
                 SELECT id, class_detected, confidence, detected_at
                 FROM detections
                 WHERE user_id = %s
                 ORDER BY detected_at DESC
-                """,
-                (user_id,)
-            )
-            detections = cursor.fetchall()
+            """, (user_id,))
+            all_detections = cursor.fetchall()
 
-        if not detections:
-            raise HTTPException(status_code=404, detail="Nenhum histórico encontrado para este usuário.")
+        grouped_detections = {}
+        for detection in all_detections:
+            class_name = detection["class_detected"]
+            detection["image_url"] = f"http://localhost:8000/image/{detection['id']}"  # Adicionando a URL da imagem
 
-        return {"detections": detections}
+            if class_name not in grouped_detections:
+                grouped_detections[class_name] = []
+            grouped_detections[class_name].append(detection)
+
+        sorted_grouped_detections = dict(
+            sorted(grouped_detections.items(), key=lambda item: item[1][0]["detected_at"], reverse=True)
+        )
+
+        return {"grouped_detections": sorted_grouped_detections}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao recuperar histórico: {str(e)}")
 
+@app.get("/export_user_data/")
+async def export_user_data(user_id: str):
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT class_detected, confidence, detected_at
+                FROM detections 
+                WHERE user_id = %s 
+                ORDER BY detected_at DESC
+            """, (user_id,))
+            detections = cursor.fetchall()
 
-# Rota para recuperar uma imagem do banco
-@app.get("/get_image/{detection_id}")
-async def get_image(detection_id: int):
+        if not detections:
+            raise HTTPException(status_code=404, detail="Nenhum histórico para exportar.")
+
+        pdf_path = f"user_{user_id}_history.pdf"
+        c = canvas.Canvas(pdf_path)
+        c.drawString(100, 800, f"Histórico de Detecções - Usuário {user_id}")
+
+        y = 750
+        for detection in detections:
+            c.drawString(100, y, f"Classe: {detection['class_detected']} | Confiança: {detection['confidence']:.2f} | Data: {detection['detected_at']}")
+            y -= 20
+            if y < 50:
+                c.showPage()
+                y = 800
+
+        c.save()
+
+        return FileResponse(pdf_path, media_type='application/pdf', filename=f"historico_{user_id}.pdf")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao exportar PDF: {str(e)}")
+
+@app.get("/suggestions/class/{class_name}")
+async def get_suggestions(class_name: str):
+    class_name_decoded = class_name.replace("%20", " ")  # Corrige espaços na URL
+
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute(
+                "SELECT recommendation FROM recommendations WHERE class_detected = %s",
+                (class_name_decoded,)
+            )
+            result = cursor.fetchone()
+
+        if result:
+            return {"class": class_name_decoded, "suggestion": result["recommendation"]}
+        else:
+            raise HTTPException(status_code=404, detail=f"Sugestões não encontradas para a classe {class_name_decoded}.")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar sugestão: {str(e)}")
+
+@app.get("/image/{detection_id}")
+async def get_detection_image(detection_id: int):
     try:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT image FROM detections WHERE id = %s", (detection_id,))
-            result = cursor.fetchone()
-            if result and result[0]:
-                img_bytes = result[0]
-                return JSONResponse(
-                    content={
-                        "image": base64.b64encode(img_bytes).decode("utf-8")
-                    }
-                )
-            else:
-                raise HTTPException(status_code=404, detail="Imagem não encontrada.")
+            cursor.execute(
+                "SELECT image FROM detections WHERE id = %s", (detection_id,)
+            )
+            image_data = cursor.fetchone()
+
+        if not image_data or not image_data[0]:
+            raise HTTPException(status_code=404, detail="Imagem não encontrada")
+
+        return Response(content=image_data[0], media_type="image/jpeg")  # Certifique-se de que é JPEG ou PNG
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao recuperar imagem: {str(e)}")
