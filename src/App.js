@@ -4,8 +4,13 @@ import { UserProvider } from './UserContext';
 import LoginPage from './LoginPage';
 import Dashboard from './Dashboard';
 import Result from './Result';
+import { useEffect } from 'react';
 
 function App() {
+  useEffect(() => {
+    document.title = "Hair-Check";
+  }, []);
+
   return (
     <UserProvider>
       <Router>

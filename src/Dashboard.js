@@ -5,181 +5,185 @@ import {
   Box,
   Button,
   Alert,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
   List,
   ListItem,
   ListItemText,
+  CircularProgress,
+  Paper,
+  Card,
+  CardContent
 } from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useNavigate } from 'react-router-dom';
 import { UserContext } from './UserContext';
+
+const classEmojis = {
+  "Alopecia Areata": "🧑‍🦲",
+  "Contact Dermatitis": "🌿",
+  "Folliculitis": "🦠",
+  "Head Lice": "🪳",
+  "Lichen Planus": "🧴",
+  "Male Pattern Baldness": "👨‍🦲",
+  "Psoriasis": "🌾",
+  "Seborrheic Dermatitis": "🧼",
+  "Telogen Effluvium": "💇",
+  "Tinea Capitis": "🍄"
+};
 
 const Dashboard = () => {
   const [errorMessage, setErrorMessage] = useState('');
   const [file, setFile] = useState(null);
-  const [history, setHistory] = useState([]); // Histórico de detecções
-  const [selectedImage, setSelectedImage] = useState(null); // Imagem selecionada do histórico
+  const [groupedDetections, setGroupedDetections] = useState({});
+  const [suggestions, setSuggestions] = useState({});
   const navigate = useNavigate();
   const { user, setResult } = useContext(UserContext);
 
-  // Função para buscar o histórico de detecções do usuário
-  const fetchHistory = useCallback(async () => {
+  const fetchHistoryAndInsights = useCallback(async () => {
     try {
-      const response = await fetch(`http://localhost:8000/user_detections/?user_id=${user.id}`);
+      const response = await fetch(`http://localhost:8000/user_detections/insights/?user_id=${user.id}`);
       if (!response.ok) throw new Error('Erro ao buscar histórico.');
       const data = await response.json();
-      setHistory(data.detections); // Atualiza o estado com o histórico
+      setGroupedDetections(data.grouped_detections);
     } catch (error) {
       console.error('Erro ao carregar histórico:', error);
-      setHistory([]); // Limpa o histórico em caso de erro
+      setGroupedDetections({});
     }
   }, [user.id]);
 
-  // Carrega o histórico quando o componente é montado
   useEffect(() => {
     if (!user) {
       navigate('/');
     } else {
-      fetchHistory();
+      fetchHistoryAndInsights();
     }
-  }, [user, navigate, fetchHistory]);
+  }, [user, navigate, fetchHistoryAndInsights]);
 
-  // Manipula a seleção de arquivos para upload
-  const handleFileChange = (event) => {
-    setFile(event.target.files[0]);
-    setErrorMessage('');
-  };
-
-  // Envia a imagem para o backend
-  const uploadImage = async () => {
-    if (!file) {
-      setErrorMessage('Selecione uma imagem!');
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append('image', file);
-    formData.append('user_id', user.id);
-
-    try {
-      const response = await fetch('http://localhost:8000/analyze_image/', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        setErrorMessage('Erro: ' + (errorData.detail || 'Erro desconhecido'));
-        return;
+  const handleExpand = async (className) => {
+    if (!suggestions[className]) {
+      try {
+        const response = await fetch(`http://localhost:8000/suggestions/class/${encodeURIComponent(className)}`);
+        if (!response.ok) throw new Error('Nenhuma sugestão encontrada.');
+        const data = await response.json();
+        setSuggestions(prev => ({ ...prev, [className]: data.suggestion }));
+      } catch (error) {
+        console.error('Erro ao carregar sugestão:', error);
+        setSuggestions(prev => ({ ...prev, [className]: 'Nenhuma sugestão disponível.' }));
       }
-
-      const data = await response.json();
-
-      // Salva o resultado no contexto
-      setResult({
-        img: data.image,
-        class: data.detection_info.class,
-        confidence: data.detection_info.confidence,
-      });
-
-      // Redireciona para a página de resultados
-      navigate('/result');
-
-      // Atualiza o histórico após o upload
-      fetchHistory();
-    } catch (error) {
-      console.error('Erro no upload:', error);
-      setErrorMessage('Erro ao enviar a imagem para o servidor!');
-    }
-  };
-
-  // Recupera a imagem de uma detecção específica
-  const fetchImage = async (detectionId) => {
-    try {
-      const response = await fetch(`http://localhost:8000/get_image/${detectionId}`);
-      const data = await response.json();
-      if (data.image) {
-        setSelectedImage(`data:image/jpeg;base64,${data.image}`);
-      }
-    } catch (error) {
-      console.error('Erro ao buscar imagem:', error);
     }
   };
 
   return (
     <Container maxWidth="md">
-      <Box sx={{ marginTop: 8, textAlign: 'center' }}>
-        <Typography component="h1" variant="h4">
-          Bem-vindo, {user?.name}!
-        </Typography>
-        <Typography variant="body1" sx={{ marginTop: 2 }}>
-          Aqui você pode enviar imagens para análise e visualizar o histórico.
-        </Typography>
-      </Box>
+    <Paper elevation={4} sx={{ padding: 4, marginTop: 6, borderRadius: 4 }}>
+    <Typography component="h1" variant="h4" align="center" gutterBottom>
+    👋 Bem-vindo, {user?.name}!
+    </Typography>
+    <Typography variant="body1" align="center">
+    Envie imagens para análise e visualize o histórico de detecções.
+    </Typography>
+    </Paper>
 
-      <Box sx={{ marginTop: 4, textAlign: 'center' }}>
-        <Typography component="h2" variant="h5" sx={{ marginBottom: 2 }}>
-          Upload de Imagem
+    <Card sx={{ marginTop: 4, padding: 3, borderRadius: 3, boxShadow: 3 }}>
+    <CardContent>
+    <Typography component="h2" variant="h5" align="center" gutterBottom>
+    📤 Upload de Imagem
+    </Typography>
+    <Box textAlign="center">
+    <input
+    accept="image/jpeg, image/png"
+    id="file-upload"
+    type="file"
+    style={{ display: 'none' }}
+    onChange={async (event) => {
+      const selectedFile = event.target.files[0];
+      if (selectedFile) {
+        setFile(selectedFile);
+        const formData = new FormData();
+        formData.append('image', selectedFile);
+        formData.append('user_id', user.id);
+        try {
+          const response = await fetch('http://localhost:8000/analyze_image/', {
+            method: 'POST',
+            body: formData,
+          });
+          if (!response.ok) {
+            const errorData = await response.json();
+            setErrorMessage('Erro: ' + (errorData.detail || 'Erro desconhecido'));
+            return;
+          }
+          const data = await response.json();
+          setResult({
+            img: data.image,
+            class: data.detection_info.class,
+            confidence: data.detection_info.confidence,
+          });
+          navigate('/result');
+          fetchHistoryAndInsights();
+        } catch (error) {
+          console.error('Erro no upload:', error);
+          setErrorMessage('Erro ao enviar a imagem para o servidor!');
+        }
+      }
+    }}
+    />
+    <label htmlFor="file-upload">
+    <Button variant="contained" component="span">Selecionar Arquivo</Button>
+    </label>
+    {file && <Typography variant="body2" sx={{ marginTop: 1 }}>📄 Arquivo: {file.name}</Typography>}
+    </Box>
+
+    {errorMessage && (
+      <Alert severity="error" sx={{ marginTop: 2 }}>{errorMessage}</Alert>
+    )}
+    </CardContent>
+    </Card>
+
+    <Box sx={{ marginTop: 6 }}>
+    <Typography component="h2" variant="h5" align="center" gutterBottom>
+    📜 Histórico de Detecções
+    </Typography>
+    {Object.keys(groupedDetections).length > 0 ? (
+      Object.entries(groupedDetections).map(([className, detections], index) => (
+        <Accordion key={index} onChange={() => handleExpand(className)} sx={{ borderRadius: 2, boxShadow: 2, marginBottom: 2 }}>
+        <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ backgroundColor: '#f5f5f5', padding: 2 }}>
+        <Typography sx={{ fontWeight: 'bold', fontSize: '1.1rem' }}>
+        {classEmojis[className] || '🏥'} <span style={{ color: '#d32f2f' }}>{className}</span> - Última Detecção: {new Date(detections[0].detected_at).toLocaleString()}
         </Typography>
-        <Box sx={{ marginBottom: 2 }}>
-          <input
-            accept="image/jpeg, image/png"
-            id="file-upload"
-            type="file"
-            style={{ display: 'none' }}
-            onChange={handleFileChange}
+        </AccordionSummary>
+        <AccordionDetails sx={{ backgroundColor: '#fafafa', padding: 2, borderRadius: 2 }}>
+        <Box sx={{ marginTop: 2, padding: 2, backgroundColor: '#eef2ff', borderRadius: '8px' }}>
+        <Typography variant="h6">💡 Sugestão:</Typography>
+        <Typography>{suggestions[className] ? (Array.isArray(suggestions[className]) ? suggestions[className].join(', ') : suggestions[className]) : <CircularProgress size={24} />}</Typography>
+        </Box>
+        <List>
+        {detections.map((detection, idx) => (
+          <ListItem key={idx}>
+          <ListItemText
+          primary={`✅ Confiança: ${(detection.confidence * 100).toFixed(2)}%`}
+          secondary={`📅 Detectado em: ${new Date(detection.detected_at).toLocaleString()}`}
           />
-          <label htmlFor="file-upload">
-            <Button variant="contained" component="span">
-              Selecionar Arquivo
+          {detection.image_url && (
+            <Button
+            variant="outlined"
+            color="primary"
+            onClick={() => window.open(detection.image_url, '_blank')}
+            >
+            🖼️ Ver Imagem
             </Button>
-          </label>
-          {file && <Typography variant="body2">Arquivo: {file.name}</Typography>}
-        </Box>
-        <Button variant="contained" color="primary" onClick={uploadImage} disabled={!file}>
-          Enviar Imagem
-        </Button>
-        {errorMessage && (
-          <Box sx={{ marginTop: 2 }}>
-            <Alert severity="error">{errorMessage}</Alert>
-          </Box>
-        )}
-      </Box>
-
-      <Box sx={{ marginTop: 6 }}>
-        <Typography component="h2" variant="h5">
-          Histórico de Detecções
-        </Typography>
-        {history.length > 0 ? (
-          <List>
-            {history.map((detection, index) => (
-              <ListItem
-                key={index}
-                button
-                onClick={() => fetchImage(detection.id)}
-              >
-                <ListItemText
-                  primary={`Classe: ${detection.class_detected}`}
-                  secondary={`Confiança: ${(detection.confidence * 100).toFixed(
-                    2
-                  )}% | Detectado em: ${new Date(
-                    detection.detected_at
-                  ).toLocaleString()}`}
-                />
-              </ListItem>
-            ))}
-          </List>
-        ) : (
-          <Typography variant="body1">Nenhuma detecção registrada.</Typography>
-        )}
-      </Box>
-
-      {selectedImage && (
-        <Box sx={{ marginTop: 4, textAlign: 'center' }}>
-          <Typography component="h2" variant="h6">
-            Imagem Selecionada
-          </Typography>
-          <img src={selectedImage} alt="Detecção" style={{ maxWidth: '100%' }} />
-        </Box>
-      )}
+          )}
+          </ListItem>
+        ))}
+        </List>
+        </AccordionDetails>
+        </Accordion>
+      ))
+    ) : (
+      <Typography variant="body1">Nenhuma detecção registrada.</Typography>
+    )}
+    </Box>
     </Container>
   );
 };
