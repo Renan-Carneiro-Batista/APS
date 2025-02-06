@@ -66,7 +66,7 @@ async def login(user: User):
 # Rota para análise de imagem
 @app.post("/analyze_image/")
 async def analyze_image(
-    image: UploadFile = File(...), 
+    image: UploadFile = File(...),
     user_id: str = Form(...)
 ):
     if not user_id:
@@ -148,9 +148,9 @@ async def get_user_detections(user_id: str):
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute(
                 """
-                SELECT id, class_detected, confidence, detected_at 
-                FROM detections 
-                WHERE user_id = %s 
+                SELECT id, class_detected, confidence, detected_at
+                FROM detections
+                WHERE user_id = %s
                 ORDER BY detected_at DESC
                 """,
                 (user_id,)
